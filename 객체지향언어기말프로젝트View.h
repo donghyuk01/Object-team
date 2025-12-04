@@ -3,6 +3,7 @@
 //
 
 #pragma once
+#include <afxinet.h>
 #include <afxdb.h>
 #include <iostream>
 #include <fstream>
@@ -10,6 +11,7 @@
 #include <gdiplus.h>
 using namespace Gdiplus;
 #pragma comment(lib, "gdiplus.lib")
+
 class bookDIg;
 class UserDlg;
 class C객체지향언어기말프로젝트View : public CFormView
@@ -72,6 +74,8 @@ public:
 	Gdiplus::Bitmap* m_pBookBitmap;
 	afx_msg void OnNMCustomdrawList1(NMHDR* pNMHDR, LRESULT* pResult);
 	afx_msg void OnMeasureItem(int nIDCtl, LPMEASUREITEMSTRUCT lpMeasureItemStruct);
+	void LoadBooksFromServer(CString type, CString keyword);
+	HBITMAP LoadImageFromURL(CString url);
 };
 
 HBITMAP LoadPngToHBITMAP(CString path);
