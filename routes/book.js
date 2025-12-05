@@ -84,51 +84,58 @@ router.post('/', (req, res) => {
     });
 });
 router.get('/search', (req, res) => {
-    const { type, keyword } = req.query;
+    const { type, keyword, sort, category } = req.query; 
 
-    console.log(`🔍 검색 요청: 유형=${type}, 키워드=${keyword} (키워드 빈 경우 전체 조회)`);
+    let searchField = type === 'author' ? 'author' : 'title';
+    let sqlCondition = '';
+    let sqlValues = [];
 
-    let searchField = '';
-    let sqlCondition = ''; // WHERE 절 조건
-    let sqlValues = [];    // SQL 쿼리 값
-
-    // 1. 검색 필드 설정
-    if (type === '제목') searchField = 'title';
-    else if (type === '저자') searchField = 'author';
-    else searchField = 'title'; // 기본값
-
-    // 2. ⭐ [수정] 키워드 유무에 따른 WHERE 절 결정 ⭐
+    console.log(`🔍 검색 요청: 유형=${type}, 키워드=${keyword}, 정렬=${sort}, 카테고리=${category}`);
+	
+    // 1. 키워드 유무에 따른 WHERE 절 결정
     if (keyword && keyword.trim() !== "") {
-        // 키워드가 있는 경우 (검색)
         sqlCondition = `WHERE b.${searchField} LIKE ?`;
         sqlValues.push(`%${keyword}%`);
-    } 
-    // 키워드가 없는 경우 (전체 조회), sqlCondition은 빈 문자열로 유지됨
+    }
 
-    // Book 테이블 정보와 해당 책의 대출 가능 여부(Book_item 확인)를 조회
+    // 2. 카테고리 필터 조건 추가
+    if (category && category.trim() !== "") {
+        sqlCondition += sqlCondition === '' ? ' WHERE ' : ' AND ';
+        sqlCondition += 'b.category = ?';
+        sqlValues.push(category); 
+    }
+    
+    // 3. 정렬 조건 설정
+    let orderByClause = 'b.bookID DESC'; // 기본값 (최신순)
+    if (sort === 'titleAsc') {
+        orderByClause = 'b.title ASC'; // 제목순
+    } else if (sort === 'regDateDesc') {
+        orderByClause = 'b.regDate DESC'; // 최신순
+    }
+    
+    // 4. SQL 쿼리 구성 (주석 제거)
     const sql = `
         SELECT 
-            b.bookID, b.title, b.author, b.publisher, b.imagePath,
+            b.bookID, b.title, b.author, b.publisher, b.imagePath, b.category,
             (SELECT COUNT(*) FROM Book_item bi WHERE bi.bookID = b.bookID AND bi.status = '대출 가능') as available_count
         FROM Book b
         ${sqlCondition}
-        ORDER BY b.bookID DESC
+        ORDER BY ${orderByClause}
     `;
     
-    // 3. 쿼리 실행 (sqlValues를 조건부로 전달)
-    db.query(sql, sqlValues, (err, results) => { // 변경: sqlValues 배열 전달
+    // 5. 쿼리 실행
+    db.query(sql, sqlValues, (err, results) => { 
         if (err) {
-            console.error('❌ 검색 쿼리 오류:', err);
+            console.error('❌ 검색/정렬 쿼리 오류:', err);
             return res.status(500).send('DB 오류');
         }
 
-        // 결과 가공
         const responseData = results.map(row => ({
             title: row.title,
             author: row.author,
             publisher: row.publisher,
-            imagePath: row.imagePath, // 예: /public/filename.png
-            status: row.available_count > 0 ? '대출 가능' : '대출 불가' // 재고가 있으면 대출 가능
+            imagePath: row.imagePath,
+            status: row.available_count > 0 ? '대출 가능' : '대출 불가' 
         }));
 
         res.json(responseData);
