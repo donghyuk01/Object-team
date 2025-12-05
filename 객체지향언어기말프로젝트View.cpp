@@ -30,6 +30,8 @@ BEGIN_MESSAGE_MAP(C객체지향언어기말프로젝트View, CFormView)
 	ON_BN_CLICKED(IDC_MainSearch, &C객체지향언어기말프로젝트View::OnBnClickedMainsearch)
 	ON_NOTIFY(NM_CUSTOMDRAW, IDC_LIST1, &C객체지향언어기말프로젝트View::OnNMCustomdrawList1)
 	ON_WM_MEASUREITEM()
+	ON_CBN_SELCHANGE(IDC_COMBO3, &C객체지향언어기말프로젝트View::OnCbnSelchangeCombo3)
+	ON_CBN_SELCHANGE(IDC_COMBO2, &C객체지향언어기말프로젝트View::OnCbnSelchangeCombo2)
 END_MESSAGE_MAP()
 
 // C객체지향언어기말프로젝트View 생성/소멸
@@ -78,10 +80,10 @@ void C객체지향언어기말프로젝트View::OnInitialUpdate()
 	mCbs.SetCurSel(0);
 
 	mCbc.AddString(_T("최신순"));
-	mCbc.AddString(_T("인기순"));
 	mCbc.AddString(_T("제목순"));
 	mCbc.SetCurSel(0);
 
+	mCb3.AddString(_T("전체"));
 	mCb3.AddString(_T("철학"));
 	mCb3.AddString(_T("종교"));
 	mCb3.AddString(_T("사회과학"));
@@ -136,7 +138,11 @@ void C객체지향언어기말프로젝트View::OnInitialUpdate()
 	mLc.InsertItem(0, info, imgIndex);*/
 
 	db.OpenEx(_T("DSN=blob;UID=mir9876;PWD=rlaehdgur;"), CDatabase::noOdbcDialog);
-	LoadBooksFromServer(_T("title"), _T(""));
+	CString strDefaultSort;
+	mCbc.GetLBText(0, strDefaultSort);
+	CString strDefaultCategory;
+	mCb3.GetLBText(0, strDefaultCategory);
+	LoadBooksFromServer(_T("title"), _T(""), strDefaultSort, _T(""));
 }
 
 HBITMAP LoadPngToHBITMAP(CString path)
@@ -251,11 +257,64 @@ void C객체지향언어기말프로젝트View::OnBnClickedMainsearch()
 	else {
 		strType = _T("제목");
 	}
+	int nSelSort = mCbc.GetCurSel();
+	CString strSortOrder;
+	if (nSelSort != LB_ERR) {
+		mCbc.GetLBText(nSelSort, strSortOrder);
+	}
+	else {
+		strSortOrder = _T("최신순"); // 기본값
+	}
 
-	// 2. 서버 통신 함수 호출
-	LoadBooksFromServer(strType, strKeyword);
+	// ⭐ 추가된 로직 2: 카테고리 필터 가져오기 ⭐
+	int nSelCategory = mCb3.GetCurSel();
+	CString strCategory;
+	if (nSelCategory != LB_ERR) {
+		mCb3.GetLBText(nSelCategory, strCategory);
+	}
+	else {
+		strCategory = _T(""); // 기본값 (전체 필터링 안 함)
+	}
+
+	// 2. 서버 통신 함수 호출 (새로운 파라미터 추가)
+	LoadBooksFromServer(strType, strKeyword, strSortOrder, strCategory);
 }
-void C객체지향언어기말프로젝트View::LoadBooksFromServer(CString type, CString keyword)
+// 객체지향언어기말프로젝트View.cpp: C객체지향언어기말프로젝트View 클래스의 구현
+// ... (이전 include 및 함수 정의 생략) ...
+
+// C객체지향언어기말프로젝트View 메시지 처리기
+// ... (다른 메시지 처리기 생략) ...
+CString EncodeStringToUrlUtf8(const CString& str)
+{
+	if (str.IsEmpty()) {
+		return _T("");
+	}
+
+	// 1. CString(Unicode) -> UTF-8 바이트 배열로 변환
+	int nUtf8Len = WideCharToMultiByte(CP_UTF8, 0, str, -1, NULL, 0, NULL, NULL);
+	if (nUtf8Len == 0) return _T("");
+
+	std::vector<char> utf8Buffer(nUtf8Len);
+	WideCharToMultiByte(CP_UTF8, 0, str, -1, utf8Buffer.data(), nUtf8Len, NULL, NULL);
+
+	// 2. UTF-8 바이트 배열을 URL 인코딩 (Hex)
+	CString strEncoded;
+	for (int i = 0; i < nUtf8Len - 1; ++i) // Null 종단 문자 제외
+	{
+		unsigned char byte = (unsigned char)utf8Buffer[i];
+		if (isalnum(byte) || byte == '-' || byte == '_' || byte == '.' || byte == '~')
+		{
+			strEncoded += (TCHAR)byte;
+		}
+		else
+		{
+			strEncoded.AppendFormat(_T("%%%02X"), byte);
+		}
+	}
+
+	return strEncoded;
+}
+void C객체지향언어기말프로젝트View::LoadBooksFromServer(CString type, CString keyword, CString sortOrder, CString category)
 {
 	CInternetSession session(_T("MyLibrarySession"));
 	CHttpConnection* pConnection = NULL;
@@ -265,14 +324,41 @@ void C객체지향언어기말프로젝트View::LoadBooksFromServer(CString type
 		CString strServer = _T("localhost");
 		INTERNET_PORT nPort = 8080;
 
-		// 1. URL 생성
+		// ⭐ 1. 한글 type과 keyword를 URL 인코딩된 UTF-8 문자열로 변환 ⭐
+		// 콤보박스의 "제목", "저자"를 서버가 기대하는 "title", "author"로 변환합니다.
+		CString strTypeServer = (type == _T("제목")) ? _T("title") : (type == _T("저자") ? _T("author") : _T("title"));
+
+		// 키워드만 URL 인코딩을 수행합니다. (strTypeServer는 영문이므로 인코딩 불필요)
+		CString strKeywordEncoded = EncodeStringToUrlUtf8(keyword);
+		CString strSortServer;
+		if (sortOrder == _T("최신순")) {
+			// 서버에서 regDate DESC로 정렬하도록 가정
+			strSortServer = _T("regDateDesc");
+		}
+		else if (sortOrder == _T("제목순")) {
+			// 서버에서 title ASC로 정렬하도록 가정
+			strSortServer = _T("titleAsc");
+		}
+		else {
+			strSortServer = _T("regDateDesc");
+		}
+		CString strCategoryEncoded = (category.IsEmpty() || category == _T("전체"))
+			? _T("")
+			: EncodeStringToUrlUtf8(category);
+		// 2. URL 생성
 		CString strObject;
-		// URL 인코딩을 고려하여 인코딩 되지 않은 상태의 문자열을 서버로 전달하는 것을 피합니다.
-		// MFC CStringW(Unicode)가 CInternetSession을 통해 전달될 때 자동으로 UTF-8로 변환될 것이라고 가정합니다.
-		strObject.Format(_T("/book/search?type=%s&keyword=%s"), type, keyword);
+		strObject.Format(_T("/book/search?type=%s&keyword=%s&sort=%s&category=%s"),
+			strTypeServer,
+			strKeywordEncoded,
+			strSortServer,
+			strCategoryEncoded);
+
+		// 디버깅을 위해 최종 URL 출력: 이제 한글 키워드가 %XX%XX 형식으로 보여야 합니다.
+		ATLTRACE(_T("서버 요청 URL: %s\n"), strObject);
+
 		pConnection = session.GetHttpConnection(strServer, nPort);
 
-		// 2. GET 요청
+		// 3. GET 요청
 		pFile = pConnection->OpenRequest(_T("GET"), strObject);
 		pFile->SendRequest();
 
@@ -282,17 +368,14 @@ void C객체지향언어기말프로젝트View::LoadBooksFromServer(CString type
 		if (dwRet == HTTP_STATUS_OK) {
 			CString strResponse;
 
-			// ⭐⭐⭐ 🛠️ UTF-8 인코딩 문제 해결 및 안정성 강화 ⭐⭐⭐
+			// ⭐⭐⭐ 🛠️ UTF-8 인코딩 문제 해결 및 안정성 강화 (응답 데이터 수신 로직은 동일하게 유지) ⭐⭐⭐
 			DWORD dwTotalLength = 0;
 			DWORD dwRead;
 
 			// 1. 응답 데이터를 메모리로 모두 읽어옴
 			CByteArray buffer;
-			// 초기 크기를 명시적으로 설정 (1 바이트로 설정하면 Read 시 0을 요청하여 루프에 진입 못함)
-			// 최소 4KB로 설정하거나, SetSize(0, 4096) 후 첫 Read 전에 SetSize(4096) 해주는 것이 좋습니다.
 			buffer.SetSize(4096, 4096);
 
-			// Read 함수의 반환값을 dwRead에 저장하며, 인자는 2개만 사용
 			while (pFile != NULL && (dwRead = pFile->Read(buffer.GetData() + dwTotalLength, buffer.GetSize() - dwTotalLength)) > 0) {
 				dwTotalLength += dwRead;
 
@@ -331,7 +414,7 @@ void C객체지향언어기말프로젝트View::LoadBooksFromServer(CString type
 
 			int nIndex = 0;
 
-			// ⭐⭐⭐ JSON 파싱 로직 (기존과 동일) ⭐⭐⭐
+			// ⭐⭐⭐ JSON 파싱 로직 (동일) ⭐⭐⭐
 
 			CString jsonArrayContent = strResponse.Trim();
 
@@ -547,4 +630,15 @@ void C객체지향언어기말프로젝트View::OnMeasureItem(int nIDCtl, LPMEAS
 		return;
 	}
 	CFormView::OnMeasureItem(nIDCtl, lpMeasureItemStruct);
+}
+void C객체지향언어기말프로젝트View::OnCbnSelchangeCombo3()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	OnBnClickedMainsearch();
+}
+
+void C객체지향언어기말프로젝트View::OnCbnSelchangeCombo2()
+{
+	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
+	OnBnClickedMainsearch();
 }

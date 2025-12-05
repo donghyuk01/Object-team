@@ -9,6 +9,8 @@
 #include <fstream>
 #include <vector>
 #include <gdiplus.h>
+#include <algorithm>	
+#include <cctype>
 using namespace Gdiplus;
 #pragma comment(lib, "gdiplus.lib")
 
@@ -74,8 +76,10 @@ public:
 	Gdiplus::Bitmap* m_pBookBitmap;
 	afx_msg void OnNMCustomdrawList1(NMHDR* pNMHDR, LRESULT* pResult);
 	afx_msg void OnMeasureItem(int nIDCtl, LPMEASUREITEMSTRUCT lpMeasureItemStruct);
-	void LoadBooksFromServer(CString type, CString keyword);
+	void LoadBooksFromServer(CString type, CString keyword, CString sortOrder, CString category);
 	HBITMAP LoadImageFromURL(CString url);
+	afx_msg void OnCbnSelchangeCombo3();
+	afx_msg void OnCbnSelchangeCombo2();
 };
 
 HBITMAP LoadPngToHBITMAP(CString path);
