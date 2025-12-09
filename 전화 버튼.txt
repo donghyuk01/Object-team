@@ -1,0 +1,120 @@
+#include <sqltypes.h>
+
+
+void UserDlg::OnBnClickedButton1()
+{
+    CDatabase* pDB = &userView->db;
+
+    if (pDB == NULL || !pDB->IsOpen()) {
+        AfxMessageBox(_T("데이터베이스 연결 상태를 확인해주세요."));
+        return;
+    }
+
+    CString strSQL = _T("SELECT phone, solveDate FROM mir9876.User");
+
+    CRecordset rs(pDB);
+
+    // [SendSMS 로직 통합 시작]
+    // send_sms.exe 경로 설정
+    TCHAR exePath[MAX_PATH];
+    GetModuleFileName(NULL, exePath, MAX_PATH);
+    PathRemoveFileSpec(exePath);
+    _tcscat_s(exePath, _T("\\send_sms.exe"));
+
+    // 실행 파일 존재 확인
+    if (GetFileAttributes(exePath) == INVALID_FILE_ATTRIBUTES)
+    {
+        AfxMessageBox(_T("오류: send_sms.exe 파일을 찾을 수 없습니다. 프로그램 폴더에 넣어주세요."));
+        return;
+    }
+    // [SendSMS 로직 통합 끝]
+
+    TRY
+    {
+        rs.Open(CRecordset::forwardOnly, strSQL, CRecordset::readOnly);
+
+        if (rs.IsEOF()) {
+            AfxMessageBox(_T("연체 회원이 없습니다."));
+            rs.Close();
+            return;
+        }
+
+        COleDateTime dtCurrent = COleDateTime::GetCurrentTime();
+        CString strPhone;
+        CString strSolveDate;
+        COleDateTime solveDate;
+        CString strMessage;
+        long lDaysRemaining;
+
+        while (!rs.IsEOF())
+        {
+            // 필드 인덱스 사용 (0: phone, 1: solveDate)
+            rs.GetFieldValue((short)0, strPhone);
+            rs.GetFieldValue((short)1, strSolveDate);
+
+            strPhone.Trim();
+            strSolveDate.Trim();
+
+            // 날짜 문자열을 COleDateTime 객체로 변환
+            if (solveDate.ParseDateTime(strSolveDate))
+            {
+                COleDateTimeSpan span = solveDate - dtCurrent;
+                lDaysRemaining = span.GetDays();
+
+                // 연체 (< 0) 또는 기한 임박 (<= 2일 남음) 확인
+                if (lDaysRemaining < 0 || lDaysRemaining <= 2)
+                {
+                    if (lDaysRemaining < 0)
+                    {
+                        // 연체 메시지 생성
+                        strMessage.Format(_T("알림: 연체 해결 기한인 %s이(가) %ld일 지났습니다. 즉시 처리해 주세요."),
+                                         solveDate.Format(_T("%Y-%m-%d")), -lDaysRemaining);
+                    }
+                    else
+                    {
+                        // 기한 임박 메시지 생성
+                        strMessage.Format(_T("연체 해결 기한(%s)이 %ld일 남았습니다. 신속히 처리 바랍니다."),
+                                         solveDate.Format(_T("%Y-%m-%d")), lDaysRemaining);
+                    }
+
+                    // [SMS 전송 실행 로직]
+                    CString cmdLine;
+                    // 명령줄 인자 생성: "send_sms.exe 경로" "받는 번호" "메시지"
+                    cmdLine.Format(_T("\"%s\" \"%s\" \"%s\""), exePath, strPhone, strMessage);
+
+                    STARTUPINFO si = { sizeof(si) };
+                    PROCESS_INFORMATION pi;
+                    si.dwFlags = STARTF_USESHOWWINDOW;
+                    si.wShowWindow = SW_HIDE;
+
+                    if (CreateProcess(NULL, cmdLine.GetBuffer(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+                    {
+                        // 15초 동안 프로세스 종료를 기다립니다.
+                        WaitForSingleObject(pi.hProcess, 15000);
+                        CloseHandle(pi.hProcess);
+                        CloseHandle(pi.hThread);
+                        TRACE(_T("SMS 전송 명령 실행됨 => %s : %s\n"), strPhone, strMessage);
+                    }
+                    else
+                    {
+                        TRACE(_T("경고: send_sms.exe 실행 실패! (대상: %s)\n"), strPhone);
+                    }
+                    // [SMS 전송 실행 로직 끝]
+                }
+            }
+            else
+            {
+                TRACE(_T("경고: 전화번호 %s의 solveDate 값 (%s)이 유효하지 않은 형식입니다.\n"), strPhone, strSolveDate);
+            }
+
+            rs.MoveNext();
+        }
+    }
+        CATCH(CDBException, e)
+    {
+        AfxMessageBox(e->m_strError);
+    }
+    END_CATCH
+
+        if (rs.IsOpen()) rs.Close();
+}
