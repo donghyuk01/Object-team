@@ -307,30 +307,47 @@ router.put('/:bookId', (req, res) => {
 // -----------------------------------------------------------------
 // 5. 도서 삭제 (DELETE /:bookId)
 // -----------------------------------------------------------------
-router.delete('/:bookId', (req, res) => {
-    const { bookId } = req.params;
+router.delete('/:bookId', async (req, res) => {
+  const { bookId } = req.params;
 
-    // TODO: 이미지 파일도 삭제해야 하지만, 현재는 DB 레코드만 삭제합니다.
+  try {
+    // 1. 대출 중인 아이템 존재 여부 확인 (⭐ LoanStatus 사용하도록 수정 ⭐)
+    const checkLoanSql = `
+      SELECT COUNT(L.ItemID) AS loan_count
+      FROM Loan L
+      JOIN Book_item BI ON L.ItemID = BI.itemID
+      WHERE BI.bookID = ? AND L.LoanStatus = '대출 중' 
+    `;
+    
+    // L.LoanStatus = '대출 중' 은 Loan 테이블에 '반납 완료' 상태가 기록되지 않은 항목을 찾습니다.
+    
+    const [loanResult] = await db.promise().query(checkLoanSql, [bookId]);
 
-    const sql = 'DELETE FROM Book WHERE bookID = ?';
+    if (loanResult[0].loan_count > 0) {
+      return res
+        .status(409)
+        .send('현재 대출 중인 아이템이 있어 도서를 삭제할 수 없습니다. 먼저 반납을 완료해 주세요.');
+    }
 
-    db.query(sql, [bookId], (err, result) => {
-        if (err) {
-            console.error('❌ DB DELETE 오류:', err);
-            // 외래 키 제약 조건 위반 오류 처리 (Book_item에 연결된 경우)
-            if (err.code === 'ER_ROW_IS_REFERENCED_2') {
-                return res.status(409).send('대출된 항목이 있어 도서를 삭제할 수 없습니다. 먼저 대출 목록에서 항목을 정리해 주세요.');
-            }
-            return res.status(500).send(`DB 오류 발생: ${err.sqlMessage}`);
-        }
+    // 2. Book_item 먼저 삭제
+    const deleteItemSql = 'DELETE FROM Book_item WHERE bookID = ?';
+    await db.promise().query(deleteItemSql, [bookId]);
 
-        if (result.affectedRows === 0) {
-            return res.status(404).send('해당 ID의 도서를 찾을 수 없습니다.');
-        }
+    // 3. Book 삭제
+    const deleteBookSql = 'DELETE FROM Book WHERE bookID = ?';
+    const [result] = await db.promise().query(deleteBookSql, [bookId]);
 
-        console.log(`📌 DELETE 성공: BookID ${bookId}`);
-        res.status(200).send({ message: '도서 삭제 성공' });
-    });
+    if (result.affectedRows === 0) {
+      return res.status(404).send('해당 ID의 도서를 찾을 수 없습니다.');
+    }
+
+    console.log(`📌 DELETE 성공: BookID ${bookId}와 모든 Book_item`);
+    res.status(200).json({ message: '도서 삭제 성공' });
+  } catch (e) {
+    console.error('❌ 도서 삭제 처리 중 오류:', e);
+    res.status(500).send(`서버 오류 발생: ${e.message}`);
+  }
 });
+
 
 module.exports = router;
